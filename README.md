@@ -60,7 +60,7 @@ Or use the helper:
 scripts/build.sh
 ```
 
-## Export or convert a model
+## Export a free YOLOv9 model
 
 Create the YOLOv9-t ncnn model files before running the smoke test or Frigate.
 The exporter image is pinned and the script prints checksums for all artifacts.
@@ -72,11 +72,10 @@ scripts/export_ncnn_model.sh
 This writes `models/yolov9t.ncnn.param`, `models/yolov9t.ncnn.bin`, and an
 ONNX reference model.
 
-Frigate+ models must first be downloaded by Frigate into `/config/model_cache`.
-Convert a compatible YOLOv9 ONNX artifact with pnnx using `fp16=0`, preserve
-its Plus label map, and use the resulting `.ncnn.param`/`.bin` pair. Do not
-blindly convert YOLO-NAS models: they require uint8 input and model-specific
-post-processing that this plugin does not implement.
+For prerequisites, validation, model files, labels, and adapting the exporter
+to another public YOLOv9 variant, see the
+[free YOLOv9 model guide](docs/free-yolov9-model-guide.md). Do not assume that
+an arbitrary ONNX model is compatible with this raw-YOLO ncnn detector.
 
 ## Validate on a GPU host
 
