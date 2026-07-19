@@ -1,47 +1,35 @@
 services:
-  onnx-smoke:
-    image: rocm-legacy/onnx-smoke:${PROFILE_NAME}
+  vulkan-smoke:
+    image: rocm-legacy/vulkan-smoke:${PROFILE_NAME}
     build:
       context: .
       dockerfile: docker/Dockerfile
-      target: onnx-smoke
+      target: vulkan-smoke
       args:
-        ROCM_VERSION: ${ROCM_VERSION}
-        ORT_TAG: ${ORT_TAG}
-        AMDGPU_DEB_URL: ${AMDGPU_DEB_URL}
-        HIP_ARCH: ${HIP_ARCH}
+        NCNN_TAG: ${NCNN_TAG}
     environment:
       PROFILE_NAME: ${PROFILE_NAME}
-      HSA_OVERRIDE_GFX_VERSION: ${HSA_OVERRIDE_GFX_VERSION}
-      ROC_ENABLE_PRE_VEGA: ${ROC_ENABLE_PRE_VEGA:-0}
-      MODEL_PATH: /models/model.onnx
+      NCNN_FP16: ${NCNN_FP16:-0}
     devices:
-      - /dev/kfd
       - /dev/dri
     group_add:
       - ${VIDEO_GID:-44}
       - ${RENDER_GID:-109}
     volumes:
-      - ./models:/models
+      - ./models:/models:ro
 
-  frigate:
+  frigate-vulkan:
     image: rocm-legacy/frigate:${PROFILE_NAME}
     build:
       context: .
       dockerfile: docker/Dockerfile
-      target: frigate
+      target: frigate-vulkan
       args:
-        ROCM_VERSION: ${ROCM_VERSION}
-        ORT_TAG: ${ORT_TAG}
-        AMDGPU_DEB_URL: ${AMDGPU_DEB_URL}
-        HIP_ARCH: ${HIP_ARCH}
-        FRIGATE_IMAGE: ${FRIGATE_IMAGE:-ghcr.io/blakeblackshear/frigate:0.17.1}
+        NCNN_TAG: ${NCNN_TAG}
+        FRIGATE_IMAGE: ${FRIGATE_IMAGE:-ghcr.io/blakeblackshear/frigate:0.17.2}
     environment:
       PROFILE_NAME: ${PROFILE_NAME}
-      HSA_OVERRIDE_GFX_VERSION: ${HSA_OVERRIDE_GFX_VERSION}
-      ROC_ENABLE_PRE_VEGA: ${ROC_ENABLE_PRE_VEGA:-0}
     devices:
-      - /dev/kfd
       - /dev/dri
     group_add:
       - ${VIDEO_GID:-44}

@@ -1,120 +1,130 @@
 # rocm-legacy
 
-Frigate image builds for legacy AMD GPUs using pinned ROCm versions and ONNX Runtime ROCm wheels.
+Vulkan/ncnn Frigate builds for legacy AMD GPUs. Despite the repository name,
+the active implementation is Vulkan-only: it uses Mesa RADV and does not
+install ROCm or expose `/dev/kfd`. The images are based on Debian Bookworm;
+the former ROCm implementation remains in Git history.
 
 ## What you get
 
-This repository builds a Frigate image with:
+- a pinned ncnn Python wheel built with `NCNN_VULKAN=ON`
+- a `vulkan-smoke` image to probe RADV, benchmark YOLOv9-t, and compare CPU and
+  GPU output
+- a `frigate-vulkan` image with a dynamically discovered `ncnn` detector
+  plugin
+- a pinned Frigate `0.17.2` base image and an experimental Polaris profile
 
-- a pinned Frigate base image, defaulting to `ghcr.io/blakeblackshear/frigate:0.17.1`
-- pinned ROCm userspace, defaulting to ROCm `5.5.1` for the `gfx803` profile
-- a pinned ONNX Runtime ROCm wheel, defaulting to ONNX Runtime `v1.16.3`
-- ONNX Runtime compiled for the GPU architecture selected by the active profile, such as `gfx803`
+## Measured gfx803 results
 
-In other words, it builds a Frigate image with an old version of ROCM that supported older AMD GPUs.
+Hardware testing on an RX 560 (RADV Polaris, Mesa 22.3.6) confirmed fp32
+CPU/GPU parity for the ncnn Vulkan backend. The following Frigate+ YOLOv9 base
+models were converted from ONNX with pnnx and measured on the GPU:
 
-## Defaults
+| Model | Resolution | Mean ms | Raw FPS |
+|---|---:|---:|---:|
+| YOLOv9-t | 320 | 14.371 | 69.6 |
+| YOLOv9-s | 320 | 22.278 | 44.9 |
+| **YOLOv9-t** | **640** | **35.289** | **28.3** |
+| YOLOv9-s | 640 | 63.571 | 15.7 |
 
-| Component | Default / tested value |
-|---|---|
-| Frigate base image | `ghcr.io/blakeblackshear/frigate:0.17.1` |
-| ONNX Runtime | `v1.16.3` |
-| Primary tested profile | `gfx803` |
-| ROCm for `gfx803` | `5.5.1` |
-| HIP architecture for `gfx803` | `gfx803` |
-| HSA override for `gfx803` | `8.0.3` |
+**Recommendation:** start with YOLOv9-t 640 for the best measured
+resolution/latency balance on gfx803. Use t-320 when detection cadence or
+camera count matters more than small-object resolution. This is a performance
+recommendation; validate detection accuracy against real camera footage before
+making it permanent. YOLO-NAS is not yet supported by this ncnn path because
+its ONNX graph cannot be faithfully converted by pnnx.
 
-## Tested profiles
+## Profile matrix
 
-| Profile | ROCm | ONNX Runtime | HIP arch | HSA override | Status |
-|---|---:|---:|---|---|---|
-| `gfx803` | `5.5.1` | `v1.16.3` | `gfx803` | `8.0.3` | tested pattern |
-| `gfx906` | `5.7.3` | `v1.16.3` | `gfx906` | `9.0.6` | placeholder |
+| Profile | ncnn | Frigate | Driver | Status |
+|---|---|---|---|---|
+| `gfx803-vulkan` | `20260526` | `0.17.2` | Mesa RADV | experimental |
 
-## What this is
+## Build
 
-`rocm-legacy` is a practical build repo for reviving older AMD GPUs that are no longer supported in current ROCm releases, but can still be useful for inference workloads.
-
-The primary output of this repository is a Frigate-compatible container image.
-
-## Usage
-
-This repository is intentionally Docker- and Compose-focused.
-
-The intended workflow is:
-
-1. pick a compatibility profile
-2. build a Frigate image
-3. optionally run the image locally with Docker Compose
-4. tag and push the image to your own registry
-
-Kubernetes-specific deployment details are out of scope for this project.
-
-## Repository structure
-
-- `profiles/` contains tested and experimental GPU family profiles
-- `docker/Dockerfile` contains the shared multi-target build
-- `docker/scripts/` contains the reusable setup and build logic used by the Docker targets
-- `scripts/` contains convenience helpers for validation
-- `docs/` contains the support matrix and project notes
-
-## Build a Frigate image
-
-1. Copy a profile into `.env`:
+Copy the profile to `.env`:
 
 ```bash
-cp profiles/gfx803.env .env
+cp profiles/gfx803-vulkan.env .env
 ```
 
-2. Build the Frigate image:
+Then build both images:
 
 ```bash
-docker compose build frigate
+docker compose build vulkan-smoke frigate-vulkan
 ```
 
-The host GPU access group IDs are **not** needed for image builds. They only matter when you run the container with GPU device access on a specific host.
-
-## Run locally with Docker Compose
-
-If you want to run the container locally with Docker Compose, get the GPU access groups from the runtime host:
+Or use the helper:
 
 ```bash
-getent group video
-getent group render
+scripts/build.sh
 ```
 
-Then update `.env` with the matching `VIDEO_GID` and `RENDER_GID` values for that host.
+## Export or convert a model
 
-Run locally:
+Create the YOLOv9-t ncnn model files before running the smoke test or Frigate.
+The exporter image is pinned and the script prints checksums for all artifacts.
 
 ```bash
-docker compose up frigate
+scripts/export_ncnn_model.sh
 ```
 
-or for a one-shot test run:
+This writes `models/yolov9t.ncnn.param`, `models/yolov9t.ncnn.bin`, and an
+ONNX reference model.
+
+Frigate+ models must first be downloaded by Frigate into `/config/model_cache`.
+Convert a compatible YOLOv9 ONNX artifact with pnnx using `fp16=0`, preserve
+its Plus label map, and use the resulting `.ncnn.param`/`.bin` pair. Do not
+blindly convert YOLO-NAS models: they require uint8 input and model-specific
+post-processing that this plugin does not implement.
+
+## Validate on a GPU host
+
+Set `VIDEO_GID` and `RENDER_GID` in `.env` to the host group IDs, then run:
 
 ```bash
-docker compose run --rm frigate
+docker compose run --rm vulkan-smoke
 ```
 
-## Validation target
+The smoke target needs only `/dev/dri`. It requires GPU enumeration and, with
+`NCNN_FP16=0`, fails if maximum CPU/GPU output difference is `>= 1e-2`.
+Record the GPU, Mesa version, checksums, and benchmark results in
+[`docs/vulkan-notes.md`](docs/vulkan-notes.md).
 
-The `onnx-smoke` target is kept as a diagnostic tool. It is useful for verifying that the pinned userspace and ONNX Runtime wheel still build cleanly and that the runtime reports ROCm support on a real host.
+## Run Frigate
+
+Configure Frigate to use the ncnn detector and the exported model:
+
+```yaml
+detectors:
+  ncnn:
+    type: ncnn
+model:
+  path: /config/model_cache/yolov9t-640.ncnn.param
+  model_type: yolo-generic
+  width: 640
+  height: 640
+  input_tensor: nchw
+  input_dtype: float
+  input_pixel_format: rgb
+  labelmap_path: /config/model_cache/yolov9t-640-labelmap.txt
+```
+
+Then start it:
 
 ```bash
-docker compose build onnx-smoke
-docker compose run --rm onnx-smoke
+docker compose up frigate-vulkan
 ```
 
-## Build, tag, and push your own image
+Confirm that Frigate logs `vulkan=True`, receives live detections without
+native crashes, and record sustained inference metrics in
+`docs/vulkan-notes.md`. The standalone smoke gate has passed, but Frigate
+integration remains experimental until that live check is complete.
 
-After `docker compose build frigate`, tag the built image for your own registry.
+## CI scope
 
-## CI validation scope
-
-GitHub Actions in this repository validates that the Docker and Compose configuration remain buildable and internally consistent.
-
-This project is intentionally conservative about what it claims. A profile being present does not mean it is broadly supported by AMD, ROCm, or an upstream application vendor. It only means the profile is structured for testing here.
+CI builds both images and verifies the plugin registers. It cannot test host
+GPU access, RADV enumeration, parity, or live-camera detections.
 
 ## License
 

@@ -1,22 +1,18 @@
 # How it works
 
-This project separates compatibility concerns from application concerns.
+This repository builds a Frigate detector path using ncnn's Vulkan backend.
+Its builder and smoke images use Debian Bookworm, matching Frigate 0.17's
+Bookworm base and Python 3.11 ABI. It relies on the distro Mesa RADV driver
+rather than ROCm, so containers need only `/dev/dri` and the host's video/render
+group IDs.
 
-## Layers
+The multi-stage Dockerfile first builds a Python 3.11 ncnn wheel with
+`NCNN_VULKAN=ON`, then layers that wheel into two images:
 
-1. A pinned ROCm-era runtime and toolchain that still knows about the target GPU family
-2. An ONNX Runtime build compiled for a specific HIP architecture
-3. An application image that consumes the built wheel
-4. A profile file that ties the pieces together
+1. `vulkan-smoke` probes Vulkan, benchmarks a YOLOv9-t ncnn export, and checks
+   CPU/GPU output parity.
+2. `frigate-vulkan` installs a dynamically discovered Frigate `ncnn` detector
+   plugin that feeds ncnn output through Frigate's YOLO post-processor.
 
-## Why profiles exist
-
-Older GPUs often need a known-good combination of:
-
-- ROCm version
-- ONNX Runtime version
-- HIP architecture target
-- HSA override value
-- optional environment toggles
-
-A profile makes that combination explicit and reviewable.
+The active profile pins the Frigate base image and ncnn release. Model export
+is deliberately separate, so image builds do not download model weights.
