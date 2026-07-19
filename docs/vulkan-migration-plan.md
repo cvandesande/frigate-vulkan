@@ -1,6 +1,8 @@
 # Vulkan implementation status
 
-Status: implemented in the working tree; awaiting hardware validation.
+Status: implemented. Standalone gfx803/RADV validation has passed; the
+corrected Frigate deployment is running, with live detector-inference
+validation still pending.
 
 The original migration plan selected ncnn with Mesa RADV for legacy AMD GPUs.
 The repository has since adopted that design as its sole active path rather
@@ -23,13 +25,17 @@ available in Git history.
 
 ## Required operator validation
 
-1. Run `scripts/export_ncnn_model.sh` to create the 320×320 YOLOv9-t ncnn and
-   ONNX artifacts, recording the printed checksums.
-2. On the gfx803 host, run `docker compose run --rm vulkan-smoke`. Confirm that
-   RADV enumerates the GPU and that fp32 parity is below `1e-2`; record mean
-   and median milliseconds in `docs/vulkan-notes.md`.
-3. Run `frigate-vulkan` with a real camera or clip. Confirm `vulkan=True` in
-   its logs and record Frigate's inference metric in the same notes file.
+1. For a new model, run `scripts/export_ncnn_model.sh` or convert the
+   compatible Frigate+ YOLOv9 ONNX artifact with pnnx (`fp16=0`), then record
+   its checksums.
+2. On a new GPU/driver combination, run `docker compose run --rm vulkan-smoke`.
+   Confirm RADV enumeration and fp32 parity below `1e-2`, and record mean and
+   median milliseconds in `docs/vulkan-notes.md`. This gate has passed on the
+   RX 560/RADV host for the benchmarked models.
+3. Exercise Frigate with a real camera or clip. Confirm `vulkan=True`, live
+   detections, and a stable detector worker; record Frigate's inference metric
+   in the same notes file. This remains the outstanding gate for the current
+   deployment.
 
 CI proves only that the images and plugin registration build; it cannot satisfy
 these hardware-dependent gates.

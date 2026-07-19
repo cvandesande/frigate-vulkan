@@ -1,8 +1,8 @@
 # Vulkan validation notes
 
 The `gfx803-vulkan` profile builds an ncnn wheel with Vulkan enabled and uses
-Mesa RADV at runtime. It is experimental until the hardware gates below are
-recorded on a gfx803 host.
+Mesa RADV at runtime. Standalone smoke validation has passed on the target
+host; live Frigate detector inference remains under validation.
 
 ## Hardware validation
 
@@ -49,21 +49,27 @@ when converting their ONNX graphs. They also use uint8 input and require a
 YOLO-NAS-specific post-processing implementation, unlike the current
 raw-YOLO ncnn plugin.
 
-## Pending hardware validation
+## Frigate integration
 
-### 2026-07-19 — Frigate integration attempt: failed and rolled back
+### 2026-07-19 — initial live inference segfault and corrective deployment
 
-The published Vulkan Frigate image loaded the latest Frigate+ YOLOv9-t 640
-model (`ea3c8aba575339b962315e9e24102e09`) with `vulkan=True`, but its first
-live detector inference segfaulted in `NcnnDetector.detect_raw` at
-`extractor.extract`. The same model and GPU passed the standalone ncnn smoke
-test, so this is an integration/process-lifecycle failure rather than model
-conversion or basic RADV support.
+The initial Vulkan Frigate image loaded the latest Frigate+ YOLOv9-t 640 model
+(`ea3c8aba575339b962315e9e24102e09`) with `vulkan=True`, but its first live
+detector inference segfaulted in `NcnnDetector.detect_raw` at
+`extractor.extract`. The same model and GPU passed standalone ncnn smoke
+testing, which ruled out basic model conversion and RADV availability.
 
-The StatefulSet and `/config/config.yml` were immediately restored to the
-previous ROCm image and ONNX Plus model. Do not redeploy the ncnn image until
-the interaction between ncnn Vulkan and Frigate's detector worker process
-lifecycle has been isolated and fixed.
+The plugin was corrected to retain the contiguous NumPy input array for the
+lifetime of `ncnn.Mat` and `extractor.extract`; the previous code passed an
+inline temporary array to native ncnn. The corrected image is now the running
+Frigate StatefulSet image, and at 2026-07-19 22:09 local time it successfully
+loaded `/config/model_cache/yolov9t-640-20260715.ncnn.param` with
+`vulkan=True`. No post-fix live inference appears in the recorded logs yet, so
+this is **not** evidence that the segfault is resolved.
+
+Next: trigger/observe real detections, confirm the detector worker remains
+stable, and record its inference metric. Do not promote this profile beyond
+experimental until that check is complete.
 
 Do not claim the profile is hardware-validated until both entries include the
 host GPU, Mesa version, model checksum, and measurements.
