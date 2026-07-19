@@ -79,7 +79,10 @@ def load(vulkan: bool):
 
 def infer(net):
     extractor = net.create_extractor()
-    if extractor.input(input_name, ncnn.Mat(data)) != 0:
+    # Keep both the NumPy array and the Mat wrapper alive through extraction.
+    # ncnn may retain the array-backed buffer rather than copying it.
+    input_mat = ncnn.Mat(data)
+    if extractor.input(input_name, input_mat) != 0:
         raise RuntimeError("ncnn input failed")
     result, output = extractor.extract(output_name)
     if result != 0:

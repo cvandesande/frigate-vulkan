@@ -6,6 +6,9 @@ on:
       - main
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   validate-compose-and-docker:
     runs-on: ubuntu-latest
@@ -16,14 +19,20 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Create Vulkan profile env file
-        run: cp profiles/gfx803-vulkan.env .env
+      - name: Validate shell and detector source
+        run: |
+          bash -n docker/scripts/build_ncnn_wheel.sh \
+            docker/scripts/install_python311.sh \
+            scripts/build.sh \
+            scripts/export_ncnn_model.sh \
+            scripts/validate_vulkan.sh
+          python3 -m py_compile docker/frigate/ncnn.py
 
       - name: Validate Docker Compose config
-        run: docker compose config > /tmp/compose.resolved.yaml
+        run: docker compose --env-file profiles/gfx803-vulkan.env config --quiet
 
       - name: Build Vulkan smoke target
-        run: docker compose build vulkan-smoke
+        run: docker compose --env-file profiles/gfx803-vulkan.env build vulkan-smoke
 
       - name: Build Vulkan Frigate target
-        run: docker compose build frigate-vulkan
+        run: docker compose --env-file profiles/gfx803-vulkan.env build frigate-vulkan
