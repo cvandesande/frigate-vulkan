@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MODEL_PARAM="${MODEL_PARAM:-/models/yolov9t.ncnn.param}"
+# Matches the default export size in scripts/export_ncnn_model.sh (IMGSZ=640).
+# Point MODEL_PARAM at another file to smoke test a different resolution, e.g.
+# MODEL_PARAM=/models/yolov9t-320.ncnn.param
+MODEL_PARAM="${MODEL_PARAM:-/models/yolov9t-640.ncnn.param}"
 MODEL_BIN="${MODEL_BIN:-${MODEL_PARAM%.param}.bin}"
 export MODEL_PARAM MODEL_BIN
 

@@ -69,8 +69,19 @@ The exporter image is pinned and the script prints checksums for all artifacts.
 scripts/export_ncnn_model.sh
 ```
 
-This writes `models/yolov9t.ncnn.param`, `models/yolov9t.ncnn.bin`, and an
-ONNX reference model.
+This writes `models/yolov9t-640.ncnn.param`, `models/yolov9t-640.ncnn.bin`,
+`models/yolov9t-640-labelmap.txt`, and an ONNX reference model.
+
+The input resolution defaults to 640. Override it with `IMGSZ`, which must be a
+multiple of 32:
+
+```bash
+IMGSZ=320 scripts/export_ncnn_model.sh
+```
+
+Artifacts are named after the size (`yolov9t-320.*`, `yolov9t-640.*`), so
+exports at different resolutions coexist in `models/`. Whichever you pick, the
+`width` and `height` in the Frigate `model:` block below must match it.
 
 For prerequisites, validation, model files, labels, and adapting the exporter
 to another public YOLOv9 variant, see the
@@ -108,6 +119,36 @@ model:
   input_pixel_format: rgb
   labelmap_path: /config/model_cache/yolov9t-640-labelmap.txt
 ```
+
+### Labelmap format
+
+`scripts/export_ncnn_model.sh` writes `models/yolov9t-640-labelmap.txt` for
+you. Copy it alongside the model. If you write one by hand, the format is
+**space-delimited**, one class per line:
+
+```text
+0 person
+1 bicycle
+2 car
+```
+
+Frigate chooses how to parse the file by testing whether the first
+space-delimited token of the first line is a digit. `0 person` parses as index
+`0` -> `person`. A colon-delimited file (`0:person`) does **not**: the parser
+falls through to its unindexed branch and uses the entire line as the label
+name, so class 0 is called `0:person` and never matches `person`.
+
+This fails silently. There is no parse error — detection runs, motion still
+works, and the only symptom is a startup warning:
+
+```text
+WARNING : front is configured to track ['person', ...] objects,
+          which are not supported by the current model.
+```
+
+If you see that warning naming ordinary classes like `person`, check the
+labelmap delimiter before suspecting the model. The line count must also equal
+the model's class count.
 
 Then start it:
 

@@ -1,6 +1,7 @@
 # Free YOLOv9 model guide
 
-This guide creates a freely available YOLOv9-t 320×320 model for the ncnn
+This guide creates a freely available YOLOv9-t model (640×640 by default, set
+`IMGSZ` for another size) for the ncnn
 Vulkan detector. It deliberately uses the public Ultralytics model download
 and does not depend on any entitlement-specific model source.
 
@@ -13,15 +14,33 @@ scripts/export_ncnn_model.sh
 ```
 
 The script runs a pinned Ultralytics container and downloads the public
-`yolov9t.pt` model on its first run. It exports both ncnn and ONNX artifacts
-at 320×320, then writes these files under `models/`:
+`yolov9t.pt` model on its first run. It exports both ncnn and ONNX artifacts at
+640×640 by default, then writes these files under `models/`:
 
 ```text
-yolov9t.ncnn.param
-yolov9t.ncnn.bin
-yolov9t.onnx
-yolov9t.ncnn.metadata.yaml   # when supplied by the exporter
+yolov9t-640.ncnn.param
+yolov9t-640.ncnn.bin
+yolov9t-640.onnx
+yolov9t-640.ncnn.metadata.yaml   # when supplied by the exporter
+yolov9t-640-labelmap.txt         # derived from metadata.yaml
 ```
+
+Set `IMGSZ` to export a different input resolution (any multiple of 32):
+
+```bash
+IMGSZ=320 scripts/export_ncnn_model.sh
+```
+
+That produces `yolov9t-320.*` instead. Because the size is in the filename,
+resolutions do not overwrite each other. Keep the Frigate `model:` block's
+`width` and `height` in step with whichever you deploy.
+
+The labelmap is generated from the exporter's own `metadata.yaml` `names`
+mapping, so the class order always matches the model. Do not transcribe class
+names by hand: `metadata.yaml` stores them as YAML (`0: person`), but Frigate
+requires space-delimited lines (`0 person`), and a colon-delimited labelmap is
+accepted without error while mislabelling every class. See the labelmap format
+section in the README.
 
 It also prints SHA-256 checksums. Record the checksums when testing or
 deploying a model so that the exact model can be reproduced later.
@@ -37,8 +56,9 @@ Set the target host's video and render group IDs in `.env`, then run:
 docker compose run --rm vulkan-smoke
 ```
 
-The default smoke paths already use `/models/yolov9t.ncnn.param` and its
-matching `.bin` file. The test requires a Vulkan GPU, checks that ncnn sees the
+The default smoke paths already use `/models/yolov9t-640.ncnn.param` and its
+matching `.bin` file. If you exported a different `IMGSZ`, point `MODEL_PARAM`
+at that file instead (for example `/models/yolov9t-320.ncnn.param`). The test requires a Vulkan GPU, checks that ncnn sees the
 GPU, measures inference, and compares Vulkan output with CPU output. With the
 default `NCNN_FP16=0`, it fails when the maximum CPU/GPU difference is
 `>= 1e-2`.
