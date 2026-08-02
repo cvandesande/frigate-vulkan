@@ -17,11 +17,11 @@ set -euo pipefail
 #   scripts/release_image.sh              # build, tag with today's date, push
 #   IMAGE_DATE=20260802 scripts/release_image.sh --no-build   # retag/push existing
 
-REPO="${FRIGATE_VULKAN_REPO:-docker.io/cvandesande/frigate-rocm-legacy}"
+REPO="${FRIGATE_VULKAN_REPO:-docker.io/cvandesande/frigate-vulkan}"
 DATE="${IMAGE_DATE:-$(date +%Y%m%d)}"
 PROFILE_FILE="${PROFILE_FILE:-profiles/gfx803-vulkan.env}"
-DATED="$REPO:frigate-vulkan-$DATE"
-MOVING="$REPO:frigate-vulkan"
+DATED="$REPO:$DATE"
+MOVING="$REPO:latest"
 
 cd "$(dirname "$0")/.."
 

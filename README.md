@@ -1,18 +1,22 @@
-# rocm-legacy
+# frigate-vulkan
 
-Vulkan/ncnn Frigate builds for legacy AMD GPUs. Despite the repository name,
-the active implementation is Vulkan-only: it uses Mesa RADV and does not
-install ROCm or expose `/dev/kfd`. The images are based on Debian Bookworm;
-the former ROCm implementation remains in Git history.
+Run Frigate's object detector on an AMD GPU through Vulkan, using ncnn and Mesa
+RADV. No ROCm, no `/dev/kfd` — which is the point: it works on cards ROCm has
+dropped. Previously named `rocm-legacy`; the ROCm implementation remains in Git
+history.
 
 ## What you get
 
 - a pinned ncnn Python wheel built with `NCNN_VULKAN=ON`
-- a `vulkan-smoke` image to probe RADV, benchmark YOLOv9-t, and compare CPU and
-  GPU output
-- a `frigate-vulkan` image with a dynamically discovered `ncnn` detector
-  plugin
-- a pinned Frigate `0.17.2` base image and an experimental Polaris profile
+- a `vulkan-smoke` image to probe RADV, benchmark, and check CPU/GPU parity
+- a `frigate-vulkan` image with a dynamically discovered `ncnn` detector plugin
+- one GPU-neutral image serving every card, published as
+  `cvandesande/frigate-vulkan`
+- scripts to convert Frigate+ ONNX models to ncnn and to benchmark them honestly
+
+Nothing in the image build depends on the GPU: the `frigate-vulkan` target takes
+only `FRIGATE_IMAGE` and `NCNN_TAG`, and ncnn compiles its Vulkan shaders at
+runtime. Per-card settings are runtime only — `RENDER_GID` and `RADV_PERFTEST`.
 
 ## Measured gfx803 results
 
@@ -34,18 +38,43 @@ recommendation; validate detection accuracy against real camera footage before
 making it permanent. YOLO-NAS is not yet supported by this ncnn path because
 its ONNX graph cannot be faithfully converted by pnnx.
 
+> **Treat these numbers with caution.** They come from 50-iteration runs on
+> default power management. On Vega 20 that regime proved unreliable — the SMU
+> drops the clock under inference while reporting 90–99% busy, so a short run
+> measures wherever it happened to sit. Use `scripts/bench_steady.py` with the
+> performance level pinned for numbers that compare across cards; the gfx906
+> table in [`docs/vulkan-notes.md`](docs/vulkan-notes.md) was measured that way.
+
 ## Profile matrix
 
-| Profile | ncnn | Frigate | Driver | Status |
+Profiles carry runtime settings only; every profile builds the same image.
+
+| Profile | GPU | `RENDER_GID` | `RADV_PERFTEST` | Status |
 |---|---|---|---|---|
-| `gfx803-vulkan` | `20260526` | `0.17.2` | Mesa RADV | experimental |
+| `gfx803-vulkan` | RX 560, Polaris 11 | 109 (Bookworm) | no-op on Polaris | experimental |
+| `gfx906-vulkan` | Radeon VII, Vega 20 | 992 (Trixie) | `transfer_queue`, required | experimental |
+
+Vega 20 needs `RADV_PERFTEST=transfer_queue`: without it RADV maps ncnn's
+transfer queue to the graphics family, and `load_model()`'s weight upload
+page-faults the gfx ring when VAAPI contexts are created concurrently, resetting
+the GPU. RADV exposes no SDMA transfer queue on Polaris, so the flag does nothing
+there. See [`docs/vulkan-notes.md`](docs/vulkan-notes.md).
+
+## Publish the image
+
+```bash
+scripts/release_image.sh
+```
+
+Builds and pushes a dated immutable tag plus a moving `:latest`. Deployments
+should reference the dated tag so rollback is a one-line edit.
 
 ## Build
 
 Copy the profile to `.env`:
 
 ```bash
-cp profiles/gfx803-vulkan.env .env
+cp profiles/gfx906-vulkan.env .env   # or gfx803-vulkan.env
 ```
 
 Then build both images:
@@ -163,7 +192,8 @@ integration remains experimental until that live check is complete.
 
 ## CI scope
 
-CI builds both images and verifies the plugin registers. It cannot test host
+CI validates every profile, asserts they resolve to identical image names,
+builds both images, and verifies the plugin registers. It cannot test host
 GPU access, RADV enumeration, parity, or live-camera detections.
 
 ## License

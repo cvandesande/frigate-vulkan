@@ -2,6 +2,22 @@
 
 ## Packaging
 
+### 2026-08-02 — renamed from `rocm-legacy` to `frigate-vulkan`
+
+The old name was wrong twice over: nothing here uses ROCm, and "legacy"
+described the GPUs rather than the project. `frigate-vulkan` was already the
+internal name — the compose service, the Dockerfile target, the image tag and
+`FRIGATE_VULKAN_IMAGE` all used it.
+
+Renamed with it: the GitHub repo (old URLs redirect), the Docker Hub repo
+(`cvandesande/frigate-rocm-legacy` → `cvandesande/frigate-vulkan`, with no
+redirect — Hub does not provide one), the local smoke image prefix, and the
+working directories on this host and `noyan`. Tags dropped their now-redundant
+prefix: `frigate-vulkan-20260802` → `20260802`, plus a moving `latest`.
+
+Image references in entries above this one still name the old repo; they are
+left as written, since that is what was deployed at the time.
+
 ### 2026-08-02 — one GPU-neutral image for both deployments
 
 The gfx803 and gfx906 images were being built and tagged separately while being
@@ -18,14 +34,14 @@ Compose image names no longer interpolate `PROFILE_NAME`:
 
 | Service | Image |
 |---|---|
-| `frigate-vulkan` | `…/frigate-rocm-legacy:frigate-vulkan` (override with `FRIGATE_VULKAN_IMAGE`) |
-| `vulkan-smoke` | `rocm-legacy/vulkan-smoke:bookworm` |
-| `vulkan-smoke-trixie` | `rocm-legacy/vulkan-smoke:trixie` |
+| `frigate-vulkan` | `cvandesande/frigate-vulkan:latest` (override with `FRIGATE_VULKAN_IMAGE`) |
+| `vulkan-smoke` | `frigate-vulkan/vulkan-smoke:bookworm` |
+| `vulkan-smoke-trixie` | `frigate-vulkan/vulkan-smoke:trixie` |
 
 Published by `scripts/release_image.sh` to **Docker Hub**
-(`cvandesande/frigate-rocm-legacy`) under a dated immutable tag plus a moving
+(`cvandesande/frigate-vulkan`) under a dated immutable tag plus a moving
 one; deployments reference the dated tag. Current release:
-`frigate-vulkan-20260802` =
+`20260802` =
 `sha256:87ca89854b19e75c0f9895d5481024ee927be197d9d2bb87607dc9bedbdb422b`.
 
 Docker Hub rather than the GitLab registry because that repo allows anonymous
@@ -476,7 +492,7 @@ otherwise runtime-suspends the GPU between bursts. It was set only for the
 duration of these measurements and restored to `auto` afterwards; adopting it
 in production is a separate decision.
 
-**Artifacts** in `~/rocm-legacy/models` on `noyan`, sha256 (first 16):
+**Artifacts** in `~/frigate-vulkan/models` on `noyan`, sha256 (first 16):
 
 | Model | .param | .bin |
 |---|---|---|

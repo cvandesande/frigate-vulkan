@@ -2,7 +2,7 @@
 # serves every profile. Per-GPU settings are runtime only (group_add, RADV_PERFTEST).
 services:
   vulkan-smoke:
-    image: rocm-legacy/vulkan-smoke:bookworm
+    image: frigate-vulkan/vulkan-smoke:bookworm
     build:
       context: .
       dockerfile: docker/Dockerfile
@@ -28,7 +28,7 @@ services:
   # is the userspace under which Vega 20 hung the gfx ring; Trixie ships 25.0.7,
   # matching the host. Separate image tag so both can be soaked back to back.
   vulkan-smoke-trixie:
-    image: rocm-legacy/vulkan-smoke:trixie
+    image: frigate-vulkan/vulkan-smoke:trixie
     build:
       context: .
       dockerfile: docker/Dockerfile
@@ -51,7 +51,7 @@ services:
       - ./models:/models:ro
 
   frigate-vulkan:
-    image: ${FRIGATE_VULKAN_IMAGE:-cvandesande/frigate-rocm-legacy:frigate-vulkan}
+    image: ${FRIGATE_VULKAN_IMAGE:-cvandesande/frigate-vulkan:latest}
     build:
       context: .
       dockerfile: docker/Dockerfile
