@@ -1,138 +1,55 @@
 # frigate-vulkan
 
-Run Frigate's object detector on an AMD GPU through Vulkan, using ncnn and Mesa
-RADV. No ROCm, no `/dev/kfd` — which is the point: it works on cards ROCm has
-dropped. Previously named `rocm-legacy`; the ROCm implementation remains in Git
-history.
+Frigate object detection on the GPU via **Vulkan**, not ROCm.
+
+ROCm is a moving target: each release drops older cards, and a GPU that works
+today can be unsupported after an upgrade. Vulkan does not work that way. ncnn's
+Vulkan backend is vendor-neutral and targets any device with a conformant
+driver, so hardware keeps working long after the vendor compute stack has moved
+on. That is the whole point of this project: a detector that does not care which
+GPU you have, or how old it is.
+
+No ROCm, no `/dev/kfd`, no HSA. Just Mesa RADV (or any other Vulkan driver) and
+`/dev/dri`.
+
+> Previously named `rocm-legacy`; the ROCm implementation remains in Git history.
 
 ## What you get
 
-- a pinned ncnn Python wheel built with `NCNN_VULKAN=ON`
-- a `vulkan-smoke` image to probe RADV, benchmark, and check CPU/GPU parity
-- a `frigate-vulkan` image with a dynamically discovered `ncnn` detector plugin
-- one GPU-neutral image serving every card, published as
-  `cvandesande/frigate-vulkan`
-- scripts to convert Frigate+ ONNX models to ncnn and to benchmark them honestly
+- **Broad GPU support.** ncnn's Vulkan backend is vendor-neutral, so this is not
+  AMD-specific by design. Validated here on Polaris 11 (RX 560) and Vega 20
+  (Radeon VII) under Mesa RADV — both outside current ROCm support.
+- **One GPU-neutral image** for every card, published as
+  `cvandesande/frigate-vulkan`. Nothing in the build depends on the GPU; ncnn
+  compiles its Vulkan shaders at runtime. Per-card settings are runtime only.
+- **A Frigate `ncnn` detector plugin**, discovered dynamically by Frigate.
+- **A parity gate.** The `vulkan-smoke` image enumerates devices, benchmarks,
+  and fails if GPU output diverges from CPU by `>= 1e-2` with fp16 disabled.
+- **Model tooling.** Convert Frigate+ ONNX models to ncnn, or export a free
+  YOLOv9 checkpoint, with checksums for every artifact.
 
-Nothing in the image build depends on the GPU: the `frigate-vulkan` target takes
-only `FRIGATE_IMAGE` and `NCNN_TAG`, and ncnn compiles its Vulkan shaders at
-runtime. Per-card settings are runtime only — `RENDER_GID` and `RADV_PERFTEST`.
-
-## Measured gfx803 results
-
-Hardware testing on an RX 560 (RADV Polaris, Mesa 22.3.6) confirmed fp32
-CPU/GPU parity for the ncnn Vulkan backend. The following Frigate+ YOLOv9 base
-models were converted from ONNX with pnnx and measured on the GPU:
-
-| Model | Resolution | Mean ms | Raw FPS |
-|---|---:|---:|---:|
-| YOLOv9-t | 320 | 14.371 | 69.6 |
-| YOLOv9-s | 320 | 22.278 | 44.9 |
-| **YOLOv9-t** | **640** | **35.289** | **28.3** |
-| YOLOv9-s | 640 | 63.571 | 15.7 |
-
-**Recommendation:** start with YOLOv9-t 640 for the best measured
-resolution/latency balance on gfx803. Use t-320 when detection cadence or
-camera count matters more than small-object resolution. This is a performance
-recommendation; validate detection accuracy against real camera footage before
-making it permanent. YOLO-NAS is not yet supported by this ncnn path because
-its ONNX graph cannot be faithfully converted by pnnx.
-
-> **Treat these numbers with caution.** They come from 50-iteration runs on
-> default power management. On Vega 20 that regime proved unreliable — the SMU
-> drops the clock under inference while reporting 90–99% busy, so a short run
-> measures wherever it happened to sit. Use `scripts/bench_steady.py` with the
-> performance level pinned for numbers that compare across cards; the gfx906
-> table in [`docs/vulkan-notes.md`](docs/vulkan-notes.md) was measured that way.
-
-## Profile matrix
-
-Profiles carry runtime settings only; every profile builds the same image.
-
-| Profile | GPU | `RENDER_GID` | `RADV_PERFTEST` | Status |
-|---|---|---|---|---|
-| `gfx803-vulkan` | RX 560, Polaris 11 | 109 (Bookworm) | no-op on Polaris | experimental |
-| `gfx906-vulkan` | Radeon VII, Vega 20 | 992 (Trixie) | `transfer_queue`, required | experimental |
-
-Vega 20 needs `RADV_PERFTEST=transfer_queue`: without it RADV maps ncnn's
-transfer queue to the graphics family, and `load_model()`'s weight upload
-page-faults the gfx ring when VAAPI contexts are created concurrently, resetting
-the GPU. RADV exposes no SDMA transfer queue on Polaris, so the flag does nothing
-there. See [`docs/vulkan-notes.md`](docs/vulkan-notes.md).
-
-## Publish the image
+## Quick start
 
 ```bash
-scripts/release_image.sh
+cp profiles/gfx906-vulkan.env .env      # or gfx803-vulkan.env
+scripts/export_ncnn_model.sh            # IMGSZ=320 for the smaller input
+docker compose run --rm vulkan-smoke    # parity + benchmark gate
+docker compose up frigate-vulkan
 ```
 
-Builds and pushes a dated immutable tag plus a moving `:latest`. Deployments
-should reference the dated tag so rollback is a one-line edit.
+Set `VIDEO_GID` and `RENDER_GID` in `.env` to the host's group IDs first — the
+render node group differs across distributions (109 on Bookworm, 992 on Trixie).
 
-## Build
+To convert a Frigate+ model you already own, use
+`scripts/convert_plus_onnx.sh <model_cache_dir> <model_id>`. For the free-model
+path and how to adapt it to other YOLOv9 variants, see the
+[free YOLOv9 model guide](docs/free-yolov9-model-guide.md). Do not assume an
+arbitrary ONNX model works with this raw-YOLO detector.
 
-Copy the profile to `.env`:
+Publish the shared image with `scripts/release_image.sh`, which pushes a dated
+immutable tag plus a moving `latest`. Deployments should reference the dated tag.
 
-```bash
-cp profiles/gfx906-vulkan.env .env   # or gfx803-vulkan.env
-```
-
-Then build both images:
-
-```bash
-docker compose build vulkan-smoke frigate-vulkan
-```
-
-Or use the helper:
-
-```bash
-scripts/build.sh
-```
-
-## Export a free YOLOv9 model
-
-Create the YOLOv9-t ncnn model files before running the smoke test or Frigate.
-The exporter image is pinned and the script prints checksums for all artifacts.
-
-```bash
-scripts/export_ncnn_model.sh
-```
-
-This writes `models/yolov9t-640.ncnn.param`, `models/yolov9t-640.ncnn.bin`,
-`models/yolov9t-640-labelmap.txt`, and an ONNX reference model.
-
-The input resolution defaults to 640. Override it with `IMGSZ`, which must be a
-multiple of 32:
-
-```bash
-IMGSZ=320 scripts/export_ncnn_model.sh
-```
-
-Artifacts are named after the size (`yolov9t-320.*`, `yolov9t-640.*`), so
-exports at different resolutions coexist in `models/`. Whichever you pick, the
-`width` and `height` in the Frigate `model:` block below must match it.
-
-For prerequisites, validation, model files, labels, and adapting the exporter
-to another public YOLOv9 variant, see the
-[free YOLOv9 model guide](docs/free-yolov9-model-guide.md). Do not assume that
-an arbitrary ONNX model is compatible with this raw-YOLO ncnn detector.
-
-## Validate on a GPU host
-
-Set `VIDEO_GID` and `RENDER_GID` in `.env` to the host group IDs, then run:
-
-```bash
-docker compose run --rm vulkan-smoke
-```
-
-The smoke target needs only `/dev/dri`. It requires GPU enumeration and, with
-`NCNN_FP16=0`, fails if maximum CPU/GPU output difference is `>= 1e-2`.
-Record the GPU, Mesa version, checksums, and benchmark results in
-[`docs/vulkan-notes.md`](docs/vulkan-notes.md).
-
-## Run Frigate
-
-Configure Frigate to use the ncnn detector and the exported model:
+## Frigate configuration
 
 ```yaml
 detectors:
@@ -149,52 +66,45 @@ model:
   labelmap_path: /config/model_cache/yolov9t-640-labelmap.txt
 ```
 
-### Labelmap format
+`width`/`height` must match the exported model's input size.
 
-`scripts/export_ncnn_model.sh` writes `models/yolov9t-640-labelmap.txt` for
-you. Copy it alongside the model. If you write one by hand, the format is
-**space-delimited**, one class per line:
+**Labelmap format matters and fails silently.** Frigate picks its parser by
+testing whether the first space-delimited token of line 1 is a digit, so it must
+be `0 person`, not `0:person`. Get it wrong and every class is misnamed with no
+parse error — the only symptom is a startup warning that your tracked objects
+"are not supported by the current model". The scripts here emit the right format.
 
-```text
-0 person
-1 bicycle
-2 car
-```
+## Profiles
 
-Frigate chooses how to parse the file by testing whether the first
-space-delimited token of the first line is a digit. `0 person` parses as index
-`0` -> `person`. A colon-delimited file (`0:person`) does **not**: the parser
-falls through to its unindexed branch and uses the entire line as the label
-name, so class 0 is called `0:person` and never matches `person`.
+Profiles carry runtime settings only; every profile builds the same image.
 
-This fails silently. There is no parse error — detection runs, motion still
-works, and the only symptom is a startup warning:
+| Profile | GPU | `RENDER_GID` | `RADV_PERFTEST` | Status |
+|---|---|---|---|---|
+| `gfx803-vulkan` | RX 560, Polaris 11 | 109 (Bookworm) | inert on Polaris | experimental |
+| `gfx906-vulkan` | Radeon VII, Vega 20 | 992 (Trixie) | `transfer_queue`, required | experimental |
 
-```text
-WARNING : front is configured to track ['person', ...] objects,
-          which are not supported by the current model.
-```
+Vega 20 needs `RADV_PERFTEST=transfer_queue`. Without it RADV maps ncnn's
+transfer queue to the graphics family, and `load_model()`'s weight upload
+page-faults the gfx ring when VAAPI contexts are created concurrently — which
+resets the GPU. RADV exposes no SDMA transfer queue on Polaris, so the flag does
+nothing there.
 
-If you see that warning naming ordinary classes like `person`, check the
-labelmap delimiter before suspecting the model. The line count must also equal
-the model's class count.
+## Benchmarks
 
-Then start it:
+Measured figures, methodology and hardware validation live in
+[`docs/vulkan-notes.md`](docs/vulkan-notes.md).
 
-```bash
-docker compose up frigate-vulkan
-```
-
-Confirm that Frigate logs `vulkan=True`, receives live detections without
-native crashes, and record sustained inference metrics in
-`docs/vulkan-notes.md`. The standalone smoke gate has passed, but Frigate
-integration remains experimental until that live check is complete.
+One caveat worth carrying: benchmark with the GPU's performance level pinned.
+On Vega 20 the SMU drops the clock under inference while still reporting 90–99%
+busy, so an unpinned short run measures wherever it happened to sit — a ~2x
+swing. `scripts/bench_steady.py` reports steady state separately from the fast
+head so the effect is visible rather than averaged away.
 
 ## CI scope
 
 CI validates every profile, asserts they resolve to identical image names,
-builds both images, and verifies the plugin registers. It cannot test host
-GPU access, RADV enumeration, parity, or live-camera detections.
+builds both images, and verifies the plugin registers. It cannot test host GPU
+access, driver enumeration, parity, or live-camera detection.
 
 ## License
 
