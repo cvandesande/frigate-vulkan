@@ -17,7 +17,7 @@ fi
 echo '=== Vulkan summary ==='
 vulkaninfo --summary
 echo '=== ncnn benchmark and CPU/GPU parity ==='
-python3.11 - <<'PY'
+python3 - <<'PY'
 import os
 import statistics
 import time
@@ -60,6 +60,14 @@ for index in range(gpu_count):
 if not gpu_count:
     raise SystemExit("No Vulkan GPU reported by ncnn")
 
+# mesa-vulkan-drivers ships lavapipe, so a software device enumerates beside
+# RADV. Benchmark numbers are meaningless unless the device is stated, so pin
+# it here and report it. Override with NCNN_DEVICE to measure a specific one.
+device = int(os.getenv("NCNN_DEVICE", ncnn.get_default_gpu_index()))
+if not 0 <= device < gpu_count:
+    raise SystemExit(f"NCNN_DEVICE={device} out of range ({gpu_count} devices)")
+print(f"ncnn selected device: {device} ({ncnn.get_gpu_info(device).device_name()})")
+
 rng = np.random.default_rng(0)
 if input_dtype == "float32":
     data = rng.random((3, height, width), dtype=np.float32)
@@ -71,6 +79,8 @@ else:
 def load(vulkan: bool):
     net = ncnn.Net()
     net.opt.use_vulkan_compute = vulkan
+    if vulkan:
+        net.set_vulkan_device(device)
     # Set all paths explicitly: relying on ncnn defaults makes the fp32 parity
     # check ambiguous when a driver exposes storage/packing support.
     net.opt.use_fp16_packed = use_fp16
@@ -95,11 +105,29 @@ def infer(net):
 gpu_net = load(True)
 for _ in range(5):
     infer(gpu_net)
+
+# BENCH_ITERS turns this from a smoke test into a soak test. The gfx-ring
+# timeout that resets the GPU on Vega 20 does not appear in a 50-iteration run;
+# it needs sustained submission, which is why every short check passed while
+# Frigate -- submitting continuously -- wedged the card within a minute.
+# Progress is printed as it goes so a long run can be followed, and so a hang
+# is visibly distinguishable from slowness.
+iters = int(os.getenv("BENCH_ITERS", "50"))
+progress_every = int(os.getenv("BENCH_PROGRESS_EVERY", "0")) or max(1, iters // 20)
 samples = []
-for _ in range(50):
+started_all = time.perf_counter()
+for i in range(1, iters + 1):
     started = time.perf_counter()
     gpu_output = infer(gpu_net)
     samples.append((time.perf_counter() - started) * 1000)
+    if i % progress_every == 0 or i == iters:
+        elapsed = time.perf_counter() - started_all
+        print(
+            f"progress {i}/{iters} elapsed={elapsed:.1f}s "
+            f"mean_ms={statistics.fmean(samples):.3f} "
+            f"last_ms={samples[-1]:.3f} rate={i / elapsed:.1f}/s",
+            flush=True,
+        )
 cpu_net = load(False)
 cpu_output = infer(cpu_net)
 cpu_repeat = infer(cpu_net)

@@ -19,17 +19,39 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Validate shell and detector source
+      - name: Validate shell and Python source
         run: |
           bash -n docker/scripts/build_ncnn_wheel.sh \
-            docker/scripts/install_python311.sh \
+            docker/scripts/install_python.sh \
             scripts/build.sh \
             scripts/export_ncnn_model.sh \
+            scripts/convert_plus_onnx.sh \
+            scripts/power_compare.sh \
+            scripts/release_image.sh \
             scripts/validate_vulkan.sh
-          python3 -m py_compile docker/frigate/ncnn.py
+          python3 -m py_compile docker/frigate/ncnn.py \
+            scripts/bench_steady.py \
+            scripts/dynamic_clock_pin.py
 
-      - name: Validate Docker Compose config
-        run: docker compose --env-file profiles/gfx803-vulkan.env config --quiet
+      - name: Validate Docker Compose config for every profile
+        run: |
+          for profile in profiles/*.env; do
+            echo "== $profile"
+            docker compose --env-file "$profile" config --quiet
+          done
+
+      # Images are GPU-neutral; drift here would silently reintroduce per-GPU builds.
+      - name: Assert profiles agree on image names
+        run: |
+          for profile in profiles/*.env; do
+            docker compose --env-file "$profile" config \
+              | grep -E '^[[:space:]]+image:' | sort > "/tmp/$(basename "$profile").images"
+          done
+          if [ "$(md5sum /tmp/*.env.images | awk '{print $1}' | sort -u | wc -l)" -ne 1 ]; then
+            echo "profiles disagree on image names:" >&2
+            grep . /tmp/*.env.images >&2
+            exit 1
+          fi
 
       - name: Build Vulkan smoke target
         run: docker compose --env-file profiles/gfx803-vulkan.env build vulkan-smoke
