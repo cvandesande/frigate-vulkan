@@ -1,0 +1,132 @@
+# syntax=docker/dockerfile:1.7
+#
+# Experimental Python 3.13 / Trixie rebuild of the Vulkan detector image.
+#
+# Unlike docker/Dockerfile, this does not build FROM Frigate. It uses the
+# Frigate image only as a parts donor for the pieces that cannot be rebuilt
+# cheaply (the React web UI, the custom nginx, go2rtc, tempio, ffmpeg, the s6
+# supervision tree) and reinstalls the Python half on 3.13 with only the
+# packages a Vulkan/ncnn deployment loads. See docs/vulkan-notes.md.
+#
+# Two things make this possible and are load-bearing:
+#   * norfair 2.3.0 declares numpy<2.0.0, which would pin Python to 3.12.
+#     norfair and filterpy are pure Python, so that pin is metadata only --
+#     both run correctly on numpy 2.x. They are installed with --no-deps to
+#     bypass the resolver, which means we own that override.
+#   * Trixie ships Mesa 25 natively, so the bookworm-backports pinning that
+#     docker/Dockerfile needs disappears entirely here.
+ARG FRIGATE_IMAGE=ghcr.io/blakeblackshear/frigate:0.17.2
+ARG NCNN_TAG=20260526
+ARG PYTHON_IMAGE=python:3.13-slim-trixie
+
+FROM ${PYTHON_IMAGE} AS ncnn-builder
+ARG NCNN_TAG
+COPY docker/scripts/build_ncnn_wheel.sh /usr/local/bin/build_ncnn_wheel.sh
+RUN chmod +x /usr/local/bin/build_ncnn_wheel.sh \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential cmake git libvulkan-dev ninja-build pkg-config \
+    && /usr/local/bin/build_ncnn_wheel.sh "${NCNN_TAG}"
+
+FROM ${FRIGATE_IMAGE} AS donor
+
+FROM ${PYTHON_IMAGE} AS frigate-vulkan-py313
+
+# openssl and yq are called by the s6 nginx/prepare scripts; mountpoint comes
+# from util-linux. mesa-vulkan-drivers here is Trixie's own 25.x.
+#
+# mesa-va-drivers/libva are for ffmpeg video decoding, which is a separate GPU
+# path from ncnn's Vulkan compute: without them go2rtc's hardware probe fails,
+# auto_detect_hwaccel logs "Did not detect hwaccel" and every camera silently
+# falls back to software decode. vainfo backs Frigate's /api/vainfo endpoint.
+# Intel's iHD driver is deliberately omitted -- this image targets AMD.
+# radeontop backs frigate.util.services.get_amd_gpu_stats; without it every
+# stats interval raises FileNotFoundError and the GPU panel stays empty.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        bash ca-certificates curl jq libgomp1 libvulkan1 mesa-vulkan-drivers \
+        libva2 libva-drm2 mesa-va-drivers vainfo \
+        openssl radeontop util-linux \
+        libcrypt1 libpcre2-8-0 libxml2 liblzma5 zlib1g \
+    && rm -rf /var/lib/apt/lists/*
+
+# Frigate's nginx is built on Bookworm and links ICU 72, which Trixie replaced
+# with ICU 76. Carrying the two .so files across is cheaper than rebuilding
+# nginx with its vod/secure-token modules.
+COPY --from=donor /usr/lib/x86_64-linux-gnu/libicuuc.so.72 \
+                  /usr/lib/x86_64-linux-gnu/libicudata.so.72 \
+                  /usr/lib/x86_64-linux-gnu/
+
+# s6-overlay: /init, the execline command set, and the service definitions.
+# All statically linked, so they cross the Bookworm -> Trixie boundary as-is.
+COPY --from=donor /init /init
+COPY --from=donor /command /command
+COPY --from=donor /package /package
+COPY --from=donor /etc/s6-overlay /etc/s6-overlay
+
+# Prebuilt components. ffmpeg links nothing but glibc, and glibc 2.36 binaries
+# run on 2.41, so only the 7.0 build is carried -- 5.0 is 211MB of fallback
+# this deployment never selects.
+COPY --from=donor /usr/local/nginx /usr/local/nginx
+COPY --from=donor /usr/local/go2rtc /usr/local/go2rtc
+COPY --from=donor /usr/local/tempio /usr/local/tempio
+COPY --from=donor /usr/local/ffmpeg /usr/local/ffmpeg
+COPY --from=donor /usr/local/bin/yq /usr/local/bin/yq
+# sqlite-vec extension, dlopened by frigate/db/sqlitevecq.py at connect time.
+# Without it the embeddings DB thread dies on startup with an OperationalError.
+COPY --from=donor /usr/local/lib/vec0.so /usr/local/lib/vec0.so
+COPY --from=donor /usr/lib/ffmpeg/7.0 /usr/lib/ffmpeg/7.0
+COPY --from=donor /opt/frigate /opt/frigate
+
+# labelmap.txt is the default detector labelmap and is read during config
+# validation, so it is required even for a model that ships its own. The two
+# CPU tflite models are the fallback detector and audio detection, both working
+# again via the litert shim, for 8MB. edgetpu_model.tflite and /openvino-model
+# are deliberately omitted -- those runtimes are not installed here.
+COPY --from=donor /labelmap.txt /audio-labelmap.txt /
+COPY --from=donor /cpu_model.tflite /cpu_audio_model.tflite /
+
+RUN ldconfig
+
+# go2rtc's run script writes /tmp/cache/homekit_config.json before frigate.app
+# creates /tmp/cache, so the redirect fails with a bare "No such file or
+# directory" and HomeKit config cleanup is skipped. Shipping the directory
+# fixes the ordering without patching upstream's script. A deployment that
+# mounts a fresh tmpfs over /tmp reintroduces it, harmlessly.
+RUN mkdir -p /tmp/cache
+
+ENV PATH=/usr/local/go2rtc/bin:/usr/local/tempio/bin:/usr/local/nginx/sbin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ENV S6_LOGGING_SCRIPT="T 1 n0 s10000000 T"
+ENV S6_CMD_WAIT_FOR_SERVICES_MAXTIME=0
+ENV DEFAULT_FFMPEG_VERSION=7.0
+ENV INCLUDED_FFMPEG_VERSIONS=7.0
+ENV TOKENIZERS_PARALLELISM=true
+ENV TRANSFORMERS_NO_ADVISORY_WARNINGS=1
+ENV OPENCV_FFMPEG_LOGLEVEL=8
+ENV PYTHONWARNINGS=ignore:::numpy.core.getlimits
+
+COPY docker/requirements-vulkan.txt /tmp/requirements-vulkan.txt
+RUN python3 -m pip install --no-cache-dir 'numpy>=2,<3' -r /tmp/requirements-vulkan.txt \
+    && python3 -m pip install --no-cache-dir --no-deps norfair==2.3.0 filterpy==1.4.5 \
+    && rm -f /tmp/requirements-vulkan.txt
+
+# Must land after the pip install so it cannot be clobbered by a real wheel.
+COPY docker/shims/tflite_runtime /usr/local/lib/python3.13/site-packages/tflite_runtime
+RUN python3 -c "from tflite_runtime.interpreter import Interpreter, load_delegate; print('tflite_runtime shim -> ai-edge-litert OK')"
+
+RUN --mount=type=bind,from=ncnn-builder,source=/wheels,target=/wheels \
+    python3 -m pip install --no-cache-dir --no-deps /wheels/*.whl \
+    && python3 -c "import ncnn; assert hasattr(ncnn, 'get_gpu_count'); print('ncnn Vulkan wheel OK')"
+
+COPY docker/scripts/patch_untracked_shm.py /usr/local/bin/patch_untracked_shm.py
+RUN python3 /usr/local/bin/patch_untracked_shm.py
+
+COPY docker/frigate/ncnn.py /opt/frigate/frigate/detectors/plugins/ncnn.py
+RUN cd /opt/frigate \
+    && python3 -c "from frigate.detectors.detector_types import api_types; assert 'ncnn' in api_types; print('detectors:', sorted(api_types))"
+
+EXPOSE 5000 8554 8555/tcp 8555/udp
+WORKDIR /opt/frigate/
+HEALTHCHECK --start-period=5m --start-interval=5s --interval=15s --timeout=5s --retries=3 \
+    CMD test -f /dev/shm/.frigate-is-stopping && exit 0; curl --fail --silent --show-error http://127.0.0.1:5000/api/version || exit 1
+ENTRYPOINT ["/init"]
