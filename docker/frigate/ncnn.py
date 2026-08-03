@@ -76,10 +76,25 @@ class NcnnDetector(DetectionApi):
 
     def __init__(self, detector_config: NcnnDetectorConfig):
         super().__init__(detector_config)
+        # Validate before touching ncnn: a failure here kills the detector
+        # process, and Frigate's watchdog then exits the whole app, so an
+        # unclear message costs a restart loop rather than a log line.
         param_path = detector_config.model.path
+        # model_path is folded into model.path by FrigateConfig, so naming both
+        # spellings keeps the message true whichever one the config used.
+        if not param_path:
+            raise ValueError(
+                "ncnn: no model configured -- set model.path (or model_path) "
+                "on this detector to an ncnn .param file"
+            )
         if not param_path.endswith(".param"):
-            raise ValueError("ncnn: model.path must name an ncnn .param file")
+            raise ValueError(
+                f"ncnn: model.path must name an ncnn .param file, got {param_path}"
+            )
         bin_path = param_path.removesuffix(".param") + ".bin"
+        for path in (param_path, bin_path):
+            if not Path(path).is_file():
+                raise ValueError(f"ncnn: model file not found: {path}")
 
         self.net = ncnn.Net()
         gpu_count = ncnn.get_gpu_count()
@@ -117,8 +132,12 @@ class NcnnDetector(DetectionApi):
         self.net.opt.use_fp16_packed = detector_config.use_fp16
         self.net.opt.use_fp16_storage = detector_config.use_fp16
         self.net.opt.use_fp16_arithmetic = detector_config.use_fp16
-        self.net.load_param(param_path)
-        self.net.load_model(bin_path)
+        # Both return -1 rather than raising, so an unchecked load defers the
+        # failure to the warm-up inference, where it looks like a lost device.
+        if self.net.load_param(param_path) != 0:
+            raise ValueError(f"ncnn: failed to parse parameter file {param_path}")
+        if self.net.load_model(bin_path) != 0:
+            raise ValueError(f"ncnn: failed to load weights {bin_path}")
         self.input_name, self.output_name = _parse_blob_names(param_path)
         logger.info("ncnn: loaded %s (vulkan=%s)", param_path, self.net.opt.use_vulkan_compute)
 
