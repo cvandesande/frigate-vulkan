@@ -28,8 +28,8 @@ ARG PYTHON_IMAGE=python:3.13-slim-trixie
 # .agents/issue-2/evidence/corvette-ui-digest.txt after the 2026-09-04 push
 # (commit 0e1bfcf -- issue #20, monitor mode M1-M5) -- never a placeholder or
 # hand-typed value.
-ARG CORVETTE_VERSION=20260906
-ARG CORVETTE_UI_IMAGE=docker.io/cvandesande/corvette-ui:${CORVETTE_VERSION}@sha256:68c55811fac795efce770e40573d5665a937afe9620b323b2b7b1395ab1923e3
+ARG CORVETTE_VERSION=20260907
+ARG CORVETTE_UI_IMAGE=docker.io/cvandesande/corvette-ui:${CORVETTE_VERSION}@sha256:3025ae0bd96eea9e865a27ee2f185bd79d60ee79af515da35292b54dae002091
 
 FROM ${PYTHON_IMAGE} AS ncnn-builder
 ARG NCNN_TAG
