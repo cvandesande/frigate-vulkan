@@ -179,6 +179,11 @@ RUN python3 /usr/local/bin/patch_vendor_location.py
 COPY docker/scripts/patch_corvette_api_location.py /usr/local/bin/patch_corvette_api_location.py
 RUN python3 /usr/local/bin/patch_corvette_api_location.py
 
+# Corvette issue #5: vod location for the recorded-range playlist route;
+# must run after patch_corvette_api_location.py -- see the script's rationale.
+COPY docker/scripts/patch_corvette_media_location.py /usr/local/bin/patch_corvette_media_location.py
+RUN python3 /usr/local/bin/patch_corvette_media_location.py
+
 # Route the browser live player's authenticated /anon WebSocket to the MoQ relay -- see the script for the full rationale.
 COPY docker/scripts/patch_anon_location.py /usr/local/bin/patch_anon_location.py
 RUN python3 /usr/local/bin/patch_anon_location.py
